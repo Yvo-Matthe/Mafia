@@ -41,7 +41,7 @@ func _ready() -> void:
 	_income = _label(bar, 18)
 	_districts = _label(bar, 18)
 	_army = _label(bar, 18)
-	_rival = _label(bar, 18, GameData.FAMILY_COLORS[GameData.RIVAL].lightened(0.3))
+	_rival = _label(bar, 18, GameData.FAMILY_COLORS[1 - main.local_family].lightened(0.3))
 
 	# Recruit panel (bottom-left)
 	var cmd := PanelContainer.new()
@@ -109,7 +109,7 @@ func _ready() -> void:
 	_end_title = _label(end_box, 44)
 	_end_reason = _label(end_box, 20)
 	var again := Button.new()
-	again.text = "Play again  [R]"
+	again.text = "Back to menu  [R]" if main.online else "Play again  [R]"
 	again.focus_mode = Control.FOCUS_NONE
 	again.pressed.connect(main.restart)
 	end_box.add_child(again)
@@ -145,20 +145,23 @@ func set_paused(p: bool) -> void:
 
 
 func show_end(winner: int, reason: String) -> void:
-	_end_title.text = "The city is yours." if winner == GameData.PLAYER else "Your family has fallen."
-	_end_title.add_theme_color_override("font_color", GameData.FAMILY_COLORS[winner].lightened(0.3))
+	if winner < 0:
+		_end_title.text = "Match over."
+	else:
+		_end_title.text = "The city is yours." if winner == main.local_family else "Your family has fallen."
+		_end_title.add_theme_color_override("font_color", GameData.FAMILY_COLORS[winner].lightened(0.3))
 	_end_reason.text = reason + "\nTime: %d:%02d" % [int(main.match_time) / 60, int(main.match_time) % 60]
 	_end_panel.visible = true
 
 
 func _process(delta: float) -> void:
-	var p := GameData.PLAYER
+	var p: int = main.local_family
 	var units: Array = main.get_units(p)
-	_money.text = "$%d" % main.money[p]
+	_money.text = "%s  $%d" % [GameData.FAMILY_SHORT[p], main.money[p]]
 	_income.text = "+$%d every %ds" % [main.income_of(p), GameData.INCOME_INTERVAL]
 	_districts.text = "Districts %d / %d" % [main.districts_owned(p), main.districts.size()]
 	_army.text = "Crew %d / %d" % [units.size(), GameData.POP_CAP]
-	_rival.text = "Morettis: %d districts, %d crew" % [main.districts_owned(GameData.RIVAL), main.get_units(GameData.RIVAL).size()]
+	_rival.text = "%ss: %d districts, %d crew" % [GameData.FAMILY_SHORT[1 - p], main.districts_owned(1 - p), main.get_units(1 - p).size()]
 
 	var hq = main.hqs[p]
 	for t in _buttons:

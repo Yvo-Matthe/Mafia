@@ -25,6 +25,10 @@ var _cooldown := 0.0
 var _flash := 0.0
 var _shot_time := 0.0
 var _shot_to := Vector2.ZERO
+var shots := 0
+var shot_to: Vector2:
+	get:
+		return _shot_to
 
 
 func setup(m: Node, f: int, pos: Vector2) -> void:
@@ -72,8 +76,31 @@ func take_damage(amount: float, _from: Node2D) -> void:
 	queue_redraw()
 
 
+## Client side: take the host's latest state for this HQ.
+func apply_net(s: Array) -> void:
+	if s[0] < hp:
+		_flash = 0.1
+	hp = s[0]
+	queue.assign(s[1])
+	build_progress = s[2]
+	if family != main.local_family:
+		rally_point = s[3]
+	if s[4] != shots:
+		shots = s[4]
+		_shot_to = s[5]
+		_shot_time = SHOT_TIME
+
+
+func _process(delta: float) -> void:
+	if main.is_authority:
+		return
+	_flash = maxf(_flash - delta, 0.0)
+	_shot_time = maxf(_shot_time - delta, 0.0)
+	queue_redraw()
+
+
 func _physics_process(delta: float) -> void:
-	if hp <= 0.0:
+	if not main.is_authority or hp <= 0.0:
 		return
 	_flash = maxf(_flash - delta, 0.0)
 	_shot_time = maxf(_shot_time - delta, 0.0)
@@ -95,6 +122,7 @@ func _physics_process(delta: float) -> void:
 			_cooldown = GUN_COOLDOWN
 			_shot_to = enemy.position
 			_shot_time = SHOT_TIME
+			shots += 1
 			enemy.take_damage(GUN_DAMAGE, self)
 	queue_redraw()
 

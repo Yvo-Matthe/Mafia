@@ -8,6 +8,7 @@ const LEASH := 320.0  # how far an auto-acquired chase may drag a unit
 const SHOT_TIME := 0.08
 
 var main: Node
+var net_id := 0
 var family := 0
 var type_id := "thug"
 var stats: Dictionary
@@ -29,6 +30,12 @@ var _cooldown := 0.0
 var _flash := 0.0
 var _shot_time := 0.0
 var _shot_to := Vector2.ZERO
+## Attack counter and last target, streamed so a client can draw shots.
+var shots := 0
+var shot_to: Vector2:
+	get:
+		return _shot_to
+var _net_pos := Vector2.ZERO
 
 
 func setup(m: Node, f: int, t: String, pos: Vector2) -> void:
@@ -110,7 +117,38 @@ func _die() -> void:
 	queue_free()
 
 
+## Client side: take the host's latest state for this unit.
+func apply_net(pos: Vector2, new_hp: float, new_shots: int, target: Vector2) -> void:
+	if _net_pos == Vector2.ZERO:
+		position = pos
+	_net_pos = pos
+	if new_hp < hp:
+		_flash = 0.12
+	hp = new_hp
+	if new_shots != shots:
+		shots = new_shots
+		_shot_to = target
+		_shot_time = SHOT_TIME
+
+
+## Client side: the host no longer reports this unit, so it died.
+func net_remove() -> void:
+	hp = 0.0
+	_die()
+
+
+func _process(delta: float) -> void:
+	if main.is_authority:
+		return
+	_flash = maxf(_flash - delta, 0.0)
+	_shot_time = maxf(_shot_time - delta, 0.0)
+	position = position.lerp(_net_pos, 1.0 - exp(-15.0 * delta))
+	queue_redraw()
+
+
 func _physics_process(delta: float) -> void:
+	if not main.is_authority:
+		return
 	_cooldown -= delta
 	_flash = maxf(_flash - delta, 0.0)
 	_shot_time = maxf(_shot_time - delta, 0.0)
@@ -135,6 +173,7 @@ func _physics_process(delta: float) -> void:
 			_cooldown = stats["cooldown"]
 			_shot_to = attack_target.position
 			_shot_time = SHOT_TIME
+			shots += 1
 			attack_target.take_damage(stats["damage"], self)
 	elif has_move_order:
 		var to_goal := move_target - position

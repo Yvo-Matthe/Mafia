@@ -17,7 +17,8 @@ const HQ_INCOME := 25  # paid every interval while the HQ stands
 const POP_CAP := 30
 const QUEUE_MAX := 5
 
-const FAMILY_NAMES := ["Your Family", "The Moretti Family"]
+const FAMILY_NAMES := ["The Corrado Family", "The Moretti Family"]
+const FAMILY_SHORT := ["Corrado", "Moretti"]
 const FAMILY_COLORS := [Color(0.30, 0.56, 0.96), Color(0.92, 0.26, 0.24)]
 
 const UNIT_ORDER := ["thug", "enforcer", "hitman"]

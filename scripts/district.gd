@@ -46,6 +46,17 @@ func is_secured_by(f: int) -> bool:
 	return owner_family == f and absf(control) >= 99.9
 
 
+## Client side: take the host's latest state for this district.
+func apply_net(new_owner: int, new_control: float, is_contested: bool) -> void:
+	control = new_control
+	contested = is_contested
+	if new_owner != owner_family:
+		var previous := owner_family
+		owner_family = new_owner
+		owner_changed.emit(self, previous)
+	queue_redraw()
+
+
 func update_capture(delta: float, units: Array) -> void:
 	presence = [0, 0]
 	for u in units:

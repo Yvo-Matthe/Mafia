@@ -7,8 +7,12 @@ config_version=5
 
 config/name="Mafia: City of Families"
 config/description="Top-down real-time strategy: take over the city, district by district."
-run/main_scene="res://scenes/main.tscn"
+run/main_scene="res://scenes/menu.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[autoload]
+
+Net="*res://scripts/net.gd"
 
 [display]
 

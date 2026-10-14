@@ -6,6 +6,7 @@ var main: Node
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	clip_contents = true
 
 
 func _to_map(p: Vector2) -> Vector2:
