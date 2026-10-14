@@ -2,7 +2,8 @@ class_name RivalAI
 extends Node
 ## Computer-controlled family. Thinks once a second: recruits, defends its
 ## headquarters, sends crews to grab the most profitable nearby districts,
-## and goes all-in on the enemy HQ once its army is large.
+## and goes all-in on the nearest enemy HQ once its army is large. Runs only
+## where the match is simulated (single player, or the host).
 
 const THINK_INTERVAL := 1.0
 const DEFEND_RADIUS := 450.0
@@ -11,7 +12,7 @@ const ALL_IN_ARMY := 18
 const CREW_SIZE := 3
 
 var main: Node
-var family := GameData.RIVAL
+var family := 1
 
 var _timer := 0.0
 var _rng := RandomNumberGenerator.new()
@@ -52,8 +53,12 @@ func _recruit(hq) -> void:
 	hq.enqueue(t)
 
 
+func _enemy_units() -> Array:
+	return main.get_units().filter(func(u): return main.is_enemy(family, u.family))
+
+
 func _defend(hq) -> void:
-	var threats: Array = main.get_units(1 - family).filter(
+	var threats := _enemy_units().filter(
 		func(u): return u.position.distance_to(hq.position) < DEFEND_RADIUS)
 	if threats.is_empty():
 		return
@@ -65,9 +70,10 @@ func _defend(hq) -> void:
 func _expand(hq) -> void:
 	var units: Array = main.get_units(family)
 	var idle: Array = units.filter(func(u): return u.is_idle() and not _is_holding(u))
-	var enemy_hq = main.hqs[1 - family]
+	var enemy_hq = _nearest(hq.position, main.hqs.filter(
+		func(h): return h != null and h.hp > 0.0 and main.is_enemy(family, h.family)))
 
-	if units.size() >= ALL_IN_ARMY and enemy_hq != null and enemy_hq.hp > 0.0:
+	if units.size() >= ALL_IN_ARMY and enemy_hq != null:
 		for u in idle:
 			u.command_attack_move(enemy_hq.position + Vector2(_rng.randf_range(-40, 40), _rng.randf_range(-40, 40)))
 		return
@@ -81,7 +87,9 @@ func _expand(hq) -> void:
 		origin += u.position
 	origin /= idle.size()
 
-	var targets: Array = main.districts.filter(func(d): return not d.is_secured_by(family))
+	# Leave blocks our allies hold alone.
+	var targets: Array = main.districts.filter(func(d):
+		return not d.is_secured_by(family) and (d.owner_family == GameData.NEUTRAL or d.owner_family == family or main.is_enemy(family, d.owner_family)))
 	if targets.is_empty():
 		if enemy_hq != null:
 			main.issue_attack_move(idle, enemy_hq.position)
@@ -101,8 +109,10 @@ func _expand(hq) -> void:
 
 func _score(d, origin: Vector2) -> float:
 	var s: float = d.income * 3.0 - origin.distance_to(d.center()) / 6.0
-	s -= d.presence[1 - family] * 25.0
-	if d.owner_family == 1 - family:
+	for f in d.presence.size():
+		if main.is_enemy(family, f):
+			s -= d.presence[f] * 25.0
+	if d.owner_family != GameData.NEUTRAL and main.is_enemy(family, d.owner_family):
 		s += 15.0
 	return s
 
@@ -111,7 +121,7 @@ func _score(d, origin: Vector2) -> float:
 func _is_holding(u) -> bool:
 	for d in main.districts:
 		if d.rect.has_point(u.position):
-			return not d.is_secured_by(family)
+			return not d.is_secured_by(family) and (d.owner_family == GameData.NEUTRAL or d.owner_family == family or main.is_enemy(family, d.owner_family))
 	return false
 
 

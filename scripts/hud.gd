@@ -8,7 +8,7 @@ var _money: Label
 var _income: Label
 var _districts: Label
 var _army: Label
-var _rival: Label
+var _rivals := {}  # family -> Label
 var _buttons := {}
 var _queue: Label
 var _selection: Label
@@ -41,7 +41,9 @@ func _ready() -> void:
 	_income = _label(bar, 18)
 	_districts = _label(bar, 18)
 	_army = _label(bar, 18)
-	_rival = _label(bar, 18, GameData.FAMILY_COLORS[1 - main.local_family].lightened(0.3))
+	for f in main.active_families():
+		if f != main.local_family:
+			_rivals[f] = _label(bar, 16, GameData.FAMILY_COLORS[f].lightened(0.3))
 
 	# Recruit panel (bottom-left)
 	var cmd := PanelContainer.new()
@@ -144,12 +146,26 @@ func set_paused(p: bool) -> void:
 	_paused.visible = p
 
 
-func show_end(winner: int, reason: String) -> void:
-	if winner < 0:
+## The local family is out but the war goes on; the player can keep watching.
+func show_eliminated() -> void:
+	_end_title.text = "Your family has fallen."
+	_end_title.add_theme_color_override("font_color", GameData.FAMILY_COLORS[main.local_family].lightened(0.3))
+	_end_reason.text = "Your headquarters burned. The war goes on without you."
+	_end_panel.visible = true
+
+
+func show_end(team: int, reason: String) -> void:
+	if team < 0:
 		_end_title.text = "Match over."
 	else:
-		_end_title.text = "The city is yours." if winner == main.local_family else "Your family has fallen."
-		_end_title.add_theme_color_override("font_color", GameData.FAMILY_COLORS[winner].lightened(0.3))
+		var won: bool = team == main.teams[main.local_family]
+		var allied: bool = main.active_families().filter(func(f): return main.teams[f] == team).size() > 1
+		if won:
+			_end_title.text = "Your side takes the city." if allied else "The city is yours."
+		else:
+			_end_title.text = "Your family has fallen."
+		var lead: int = main.local_family if won else main.active_families().filter(func(f): return main.teams[f] == team)[0]
+		_end_title.add_theme_color_override("font_color", GameData.FAMILY_COLORS[lead].lightened(0.3))
 	_end_reason.text = reason + "\nTime: %d:%02d" % [int(main.match_time) / 60, int(main.match_time) % 60]
 	_end_panel.visible = true
 
@@ -161,7 +177,13 @@ func _process(delta: float) -> void:
 	_income.text = "+$%d every %ds" % [main.income_of(p), GameData.INCOME_INTERVAL]
 	_districts.text = "Districts %d / %d" % [main.districts_owned(p), main.districts.size()]
 	_army.text = "Crew %d / %d" % [units.size(), GameData.POP_CAP]
-	_rival.text = "%ss: %d districts, %d crew" % [GameData.FAMILY_SHORT[1 - p], main.districts_owned(1 - p), main.get_units(1 - p).size()]
+	for f in _rivals:
+		var tag := ""
+		if main.eliminated[f]:
+			tag = "  (out)"
+		elif main.teams[f] == main.teams[p]:
+			tag = "  (ally)"
+		_rivals[f].text = "%s %d · %d crew%s" % [GameData.FAMILY_SHORT[f], main.districts_owned(f), main.get_units(f).size(), tag]
 
 	var hq = main.hqs[p]
 	for t in _buttons:

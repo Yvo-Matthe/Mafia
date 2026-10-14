@@ -108,7 +108,7 @@ func _acquire(t: Node2D) -> void:
 
 
 func _is_valid_target(t) -> bool:
-	return t != null and is_instance_valid(t) and t.hp > 0.0 and t.family != family
+	return t != null and is_instance_valid(t) and t.hp > 0.0 and main.is_enemy(family, t.family)
 
 
 func _die() -> void:

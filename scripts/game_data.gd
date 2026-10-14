@@ -7,8 +7,7 @@ const STREET := 80.0
 const COLS := 4
 const ROWS := 3
 
-const PLAYER := 0
-const RIVAL := 1
+const MAX_FAMILIES := 4
 const NEUTRAL := -1
 
 const START_MONEY := 600
@@ -17,9 +16,12 @@ const HQ_INCOME := 25  # paid every interval while the HQ stands
 const POP_CAP := 30
 const QUEUE_MAX := 5
 
-const FAMILY_NAMES := ["The Corrado Family", "The Moretti Family"]
-const FAMILY_SHORT := ["Corrado", "Moretti"]
-const FAMILY_COLORS := [Color(0.30, 0.56, 0.96), Color(0.92, 0.26, 0.24)]
+const FAMILY_NAMES := ["The Corrado Family", "The Moretti Family", "The Bellini Family", "The Vitale Family"]
+const FAMILY_SHORT := ["Corrado", "Moretti", "Bellini", "Vitale"]
+const FAMILY_COLORS := [
+	Color(0.30, 0.56, 0.96), Color(0.92, 0.26, 0.24),
+	Color(0.30, 0.80, 0.42), Color(0.95, 0.74, 0.20),
+]
 
 const UNIT_ORDER := ["thug", "enforcer", "hitman"]
 const UNIT_TYPES := {
@@ -55,4 +57,4 @@ const DISTRICTS := [
 	{"name": "Midtown", "income": 30},
 	{"name": "Harlem Heights", "income": 25},
 ]
-const HOME_DISTRICTS := [0, 11]  # HQ location per family
+const HOME_DISTRICTS := [0, 11, 3, 8]  # HQ district per family: opposite corners first

@@ -14,9 +14,11 @@ var district_name := ""
 var income := 0
 var rect := Rect2()
 var owner_family := GameData.NEUTRAL
-## +100 = fully held by the player, -100 = fully held by the rival.
-var control := 0.0
-var presence := [0, 0]
+## Whose capture meter is showing: the owner once owned, else the family
+## part-way through taking it.
+var control_family := GameData.NEUTRAL
+var control := 0.0  # 0..100
+var presence := [0, 0, 0, 0]
 var contested := false
 
 var _buildings: Array = []
@@ -37,17 +39,19 @@ func center() -> Vector2:
 
 func set_owner_family(f: int) -> void:
 	owner_family = f
-	control = 0.0 if f == GameData.NEUTRAL else (100.0 if f == GameData.PLAYER else -100.0)
+	control_family = f
+	control = 0.0 if f == GameData.NEUTRAL else 100.0
 	queue_redraw()
 
 
 ## True once the family owns the block and its meter is full.
 func is_secured_by(f: int) -> bool:
-	return owner_family == f and absf(control) >= 99.9
+	return owner_family == f and control >= 99.9
 
 
 ## Client side: take the host's latest state for this district.
-func apply_net(new_owner: int, new_control: float, is_contested: bool) -> void:
+func apply_net(new_owner: int, new_control_family: int, new_control: float, is_contested: bool) -> void:
+	control_family = new_control_family
 	control = new_control
 	contested = is_contested
 	if new_owner != owner_family:
@@ -57,28 +61,49 @@ func apply_net(new_owner: int, new_control: float, is_contested: bool) -> void:
 	queue_redraw()
 
 
-func update_capture(delta: float, units: Array) -> void:
-	presence = [0, 0]
+## Units of exactly one team in the block move its meter: they top up a
+## block their team owns, drain an enemy block to neutral, then claim it.
+## `teams[f]` is family f's team.
+func update_capture(delta: float, units: Array, teams: Array) -> void:
+	presence = [0, 0, 0, 0]
 	for u in units:
 		if rect.has_point(u.position):
 			presence[u.family] += 1
-	contested = presence[0] > 0 and presence[1] > 0
+	var team_counts := {}
+	for f in presence.size():
+		if presence[f] > 0:
+			team_counts[teams[f]] = team_counts.get(teams[f], 0) + presence[f]
+	contested = team_counts.size() > 1
 	queue_redraw()
-	if contested or (presence[0] == 0 and presence[1] == 0):
+	if team_counts.size() != 1:
 		return
-	var dir := 1.0 if presence[0] > 0 else -1.0
-	var n: int = mini(presence[0] + presence[1], MAX_CAPTURERS)
-	control = clampf(control + dir * CAPTURE_RATE * n * delta, -100.0, 100.0)
+	var team: int = team_counts.keys()[0]
+	var leader := -1  # the team's family with most units here takes the block
+	for f in presence.size():
+		if teams[f] == team and presence[f] > 0 and (leader < 0 or presence[f] > presence[leader]):
+			leader = f
+	var amount: float = CAPTURE_RATE * mini(team_counts[team], MAX_CAPTURERS) * delta
 
 	var previous := owner_family
-	if control >= 100.0:
-		owner_family = GameData.PLAYER
-	elif control <= -100.0:
-		owner_family = GameData.RIVAL
-	elif owner_family == GameData.PLAYER and control <= 0.0:
-		owner_family = GameData.NEUTRAL
-	elif owner_family == GameData.RIVAL and control >= 0.0:
-		owner_family = GameData.NEUTRAL
+	if owner_family != GameData.NEUTRAL:
+		if teams[owner_family] == team:
+			control = minf(control + amount, 100.0)
+		else:
+			control -= amount
+			if control <= 0.0:
+				owner_family = GameData.NEUTRAL
+				control_family = GameData.NEUTRAL
+				control = 0.0
+	elif control_family != GameData.NEUTRAL and control_family != leader and teams[control_family] != team:
+		control -= amount
+		if control <= 0.0:
+			control_family = GameData.NEUTRAL
+			control = 0.0
+	else:
+		control_family = leader
+		control = minf(control + amount, 100.0)
+		if control >= 100.0:
+			owner_family = leader
 	if previous != owner_family:
 		owner_changed.emit(self, previous)
 
@@ -125,9 +150,9 @@ func _draw() -> void:
 
 	var c := center()
 	draw_circle(c, PLAZA_RADIUS, tint.darkened(0.25))
-	if absf(control) > 0.5:
-		var col: Color = GameData.FAMILY_COLORS[0 if control > 0 else 1]
-		draw_arc(c, PLAZA_RADIUS + 8.0, -PI / 2.0, -PI / 2.0 + TAU * absf(control) / 100.0, 64, col, 6.0)
+	if control > 0.5 and control_family != GameData.NEUTRAL:
+		var col: Color = GameData.FAMILY_COLORS[control_family]
+		draw_arc(c, PLAZA_RADIUS + 8.0, -PI / 2.0, -PI / 2.0 + TAU * control / 100.0, 64, col, 6.0)
 
 	var font := ThemeDB.fallback_font
 	var title_pos := rect.position + Vector2(0, 30)
