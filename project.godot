@@ -1,0 +1,26 @@
+; Engine configuration file.
+; Open this folder in Godot 4.3+ (Project > Import) to edit or run the game.
+
+config_version=5
+
+[application]
+
+config/name="Mafia: City of Families"
+config/description="Top-down real-time strategy: take over the city, district by district."
+run/main_scene="res://scenes/menu.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[autoload]
+
+Net="*res://scripts/net.gd"
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.07, 0.07, 0.08, 1)
