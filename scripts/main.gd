@@ -2,6 +2,11 @@ extends Node2D
 ## Root of a match: builds the city, tracks money and victory, and turns
 ## player input into orders.
 ##
+## The city is a grid of blocks grouped into named districts. Every block is
+## lined with businesses that crews extort for protection money and that a
+## family can then take over outright; whoever holds most of a district's
+## businesses runs it.
+##
 ## Up to four families take part, each run by a player or the computer, and
 ## families on the same team are allies. Online, the host runs the whole
 ## simulation (computer families included); joined players' games only draw
@@ -10,7 +15,7 @@ extends Node2D
 const DRAG_THRESHOLD := 6.0
 const CAMERA_SPEED := 900.0
 const EDGE_MARGIN := 10.0
-const ZOOM_MIN := 0.45
+const ZOOM_MIN := 0.3
 const ZOOM_MAX := 1.6
 const AUTOPLAY_TIME_LIMIT := 1800.0
 const SNAPSHOT_INTERVAL := 1.0 / 20.0
@@ -20,6 +25,9 @@ var camera: Camera2D
 var hud: CanvasLayer
 var overlay: Node2D
 var districts: Array = []
+var businesses: Array = []
+## The business shown in the info panel (clicked by the local player).
+var selected_business = null
 ## Per family; null for an empty seat.
 var hqs: Array = []
 var money: Array = []
@@ -54,6 +62,10 @@ var _snapshot_timer := 0.0
 var _bot_timer := 0.0
 var _orders_received := 0
 var _ai_families := {}
+var _city_ready := false
+## Spatial index: grid cell -> businesses whose extortion zone touches it.
+var _business_grid := {}
+const GRID_CELL := 200.0
 
 
 func _ready() -> void:
@@ -76,6 +88,7 @@ func _ready() -> void:
 	add_child(world)
 	_build_city()
 	_spawn_families()
+	_city_ready = true
 
 	camera = Camera2D.new()
 	add_child(camera)
@@ -127,25 +140,60 @@ func is_enemy(a: int, b: int) -> bool:
 
 func _build_city() -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 1931
-	var block := Vector2(
-		(GameData.WORLD_SIZE.x - GameData.STREET * (GameData.COLS + 1)) / GameData.COLS,
-		(GameData.WORLD_SIZE.y - GameData.STREET * (GameData.ROWS + 1)) / GameData.ROWS)
-	for r in GameData.ROWS:
-		for c in GameData.COLS:
-			var i := r * GameData.COLS + c
-			var pos := Vector2(GameData.STREET + c * (block.x + GameData.STREET), GameData.STREET + r * (block.y + GameData.STREET))
+	rng.seed = 1931  # same city on every player's machine
+	var span := GameData.DISTRICT_SPAN
+	for dr in GameData.DISTRICT_ROWS:
+		for dc in GameData.DISTRICT_COLS:
+			var i := dr * GameData.DISTRICT_COLS + dc
+			var rects: Array[Rect2] = []
+			for r in span:
+				for c in span:
+					rects.append(block_rect(dc * span + c, dr * span + r))
 			var d := District.new()
-			d.setup(i, Rect2(pos, block), GameData.DISTRICTS[i], rng)
-			d.owner_changed.connect(_on_district_owner_changed)
+			d.setup(i, rects, GameData.DISTRICTS[i])
+			d.controller_changed.connect(_on_district_controller_changed)
 			world.add_child(d)
 			districts.append(d)
+			for b in d.generate(rng, businesses.size(), GameData.DISTRICTS[i]["mix"]):
+				b.owner_changed.connect(_on_business_owner_changed)
+				world.add_child(b)
+				businesses.append(b)
+				_index_business(b)
+
+
+func block_rect(col: int, row: int) -> Rect2:
+	var step := GameData.BLOCK + Vector2(GameData.STREET, GameData.STREET)
+	return Rect2(Vector2(GameData.STREET, GameData.STREET) + Vector2(col, row) * step, GameData.BLOCK)
+
+
+func _index_business(b) -> void:
+	var zone: Rect2 = b.rect.grow(GameData.EXTORT_ZONE)
+	for gy in range(int(zone.position.y / GRID_CELL), int(zone.end.y / GRID_CELL) + 1):
+		for gx in range(int(zone.position.x / GRID_CELL), int(zone.end.x / GRID_CELL) + 1):
+			var key := Vector2i(gx, gy)
+			if not _business_grid.has(key):
+				_business_grid[key] = []
+			_business_grid[key].append(b)
+
+
+## The business a gangster at `p` is leaning on: the closest one in reach.
+func business_at(p: Vector2, reach := GameData.EXTORT_ZONE):
+	var best = null
+	var best_d := reach
+	for b in _business_grid.get(Vector2i(int(p.x / GRID_CELL), int(p.y / GRID_CELL)), []):
+		var dist: float = b.distance_to(p)
+		if dist <= best_d:
+			best_d = dist
+			best = b
+	return best
 
 
 func _spawn_families() -> void:
 	for f in active_families():
 		var home: District = districts[GameData.HOME_DISTRICTS[f]]
-		home.set_owner_family(f)
+		for b in home.businesses:
+			b.set_owner_family(f)
+		home.recompute()
 		var hq := HQ.new()
 		hq.setup(self, f, home.center())
 		world.add_child(hq)
@@ -212,17 +260,32 @@ func separation(unit) -> Vector2:
 
 
 func income_of(family: int) -> int:
-	var total := 0
+	var parts := income_breakdown(family)
+	return parts["hq"] + parts["protection"] + parts["owned"] + parts["bonus"]
+
+
+## Where a family's money comes from each interval.
+func income_breakdown(family: int) -> Dictionary:
+	var out := {"hq": 0, "protection": 0, "owned": 0, "bonus": 0}
 	if hqs[family] != null and hqs[family].hp > 0.0:
-		total += GameData.HQ_INCOME
+		out["hq"] = GameData.HQ_INCOME
+	for b in businesses:
+		if b.owner_family == family:
+			out["owned" if b.status == Business.Status.OWNED else "protection"] += b.income()
 	for d in districts:
-		if d.owner_family == family:
-			total += d.income
-	return total
+		if d.controller == family:
+			out["bonus"] += d.bonus
+	return out
 
 
+## Districts the family runs.
 func districts_owned(family: int) -> int:
-	return districts.filter(func(d): return d.owner_family == family).size()
+	return districts.filter(func(d): return d.controller == family).size()
+
+
+func businesses_held(family: int, only_owned := false) -> int:
+	return businesses.filter(func(b):
+		return b.owner_family == family and (not only_owned or b.status == Business.Status.OWNED)).size()
 
 
 func team_name(team: int) -> String:
@@ -276,16 +339,29 @@ func on_unit_died(u) -> void:
 	_units_by_id.erase(u.net_id)
 
 
-func _on_district_owner_changed(d, previous: int) -> void:
-	if autoplay:
+func _on_business_owner_changed(b, previous: int) -> void:
+	districts[b.district].recompute()
+	if autoplay or not _city_ready:
 		return
-	if d.owner_family == local_family:
-		hud.notify("We took %s" % d.district_name)
+	if b.owner_family == local_family:
+		hud.notify("%s pays us protection now" % b.business_name)
 	elif previous == local_family:
-		hud.notify("We lost %s" % d.district_name)
-	elif d.owner_family != GameData.NEUTRAL:
-		var who := "Our allies, the %ss," if teams[d.owner_family] == teams[local_family] else "The %ss"
-		hud.notify((who + " took %s") % [GameData.FAMILY_SHORT[d.owner_family], d.district_name])
+		if b.owner_family == GameData.NEUTRAL:
+			hud.notify("We lost our grip on %s" % b.business_name)
+		else:
+			hud.notify("The %ss muscled us out of %s" % [GameData.FAMILY_SHORT[b.owner_family], b.business_name])
+
+
+func _on_district_controller_changed(d, previous: int) -> void:
+	if autoplay or not _city_ready:
+		return
+	if d.controller == local_family:
+		hud.notify("%s is our turf now" % d.district_name)
+	elif previous == local_family:
+		hud.notify("We no longer run %s" % d.district_name)
+	elif d.controller != GameData.NEUTRAL:
+		var who := "Our allies, the %ss, run" if teams[d.controller] == teams[local_family] else "The %ss run"
+		hud.notify((who + " %s now") % [GameData.FAMILY_SHORT[d.controller], d.district_name])
 
 
 # --- Simulation ------------------------------------------------------------
@@ -314,9 +390,7 @@ func _physics_process(delta: float) -> void:
 		for f in active_families():
 			money[f] += income_of(f)
 
-	var units := get_units()
-	for d in districts:
-		d.update_capture(delta, units, teams)
+	_update_extortion(delta)
 
 	_check_victory()
 	if online and not game_over:
@@ -327,6 +401,20 @@ func _physics_process(delta: float) -> void:
 	if autoplay and not game_over and match_time > AUTOPLAY_TIME_LIMIT:
 		print("AUTOPLAY RESULT: draw after %.0fs" % match_time)
 		get_tree().quit(0)
+
+
+## Every gangster leans on the closest business in reach.
+func _update_extortion(delta: float) -> void:
+	var counts := {}
+	for u in get_units():
+		var b = business_at(u.position)
+		if b != null:
+			if not counts.has(b):
+				counts[b] = [0, 0, 0, 0]
+			counts[b][u.family] += 1
+	var nobody := [0, 0, 0, 0]
+	for b in businesses:
+		b.update_extortion(delta, counts.get(b, nobody), teams)
 
 
 func _check_victory() -> void:
@@ -345,7 +433,7 @@ func _check_victory() -> void:
 		return
 	var owner_teams := {}
 	for d in districts:
-		owner_teams[teams[d.owner_family] if d.owner_family >= 0 else -1] = true
+		owner_teams[teams[d.controller] if d.controller >= 0 else -1] = true
 	if owner_teams.size() == 1 and not owner_teams.has(-1):
 		var team: int = owner_teams.keys()[0]
 		_end_match(team, "%s %s every district in the city." % [team_name(team), "control" if team_name(team).ends_with("families") else "controls"])
@@ -356,9 +444,9 @@ func _eliminate(f: int) -> void:
 	eliminated[f] = true
 	for u in get_units(f):
 		u.net_remove()
-	for d in districts:
-		if d.owner_family == f or d.control_family == f:
-			d.set_owner_family(GameData.NEUTRAL)
+	for b in businesses:
+		if b.owner_family == f or b.control_family == f:
+			b.set_owner_family(GameData.NEUTRAL)
 	if online:
 		_net_eliminated.rpc(f)
 	_announce_elimination(f)
@@ -394,7 +482,8 @@ func _show_end(team: int, reason: String) -> void:
 	winning_team = team
 	get_tree().paused = true
 	if autoplay:
-		var owned := active_families().map(func(f): return "%s %d" % [GameData.FAMILY_SHORT[f], districts_owned(f)])
+		var owned := active_families().map(func(f): return "%s %d (%d businesses, %d owned, $%d/interval)" % [
+			GameData.FAMILY_SHORT[f], districts_owned(f), businesses_held(f), businesses_held(f, true), income_of(f)])
 		print("AUTOPLAY RESULT: winner=%s after %.0fs (%s) districts: %s" % [
 			team_name(team) if team >= 0 else "none", match_time, reason, ", ".join(owned)])
 		if online and is_authority:
@@ -441,13 +530,13 @@ func _pack_units() -> PackedByteArray:
 
 
 func _make_state() -> Array:
-	var ds := []
-	for d in districts:
-		ds.append([d.owner_family, d.control_family, d.control, d.contested])
+	var ds := StreamPeerBuffer.new()
+	for b in businesses:
+		b.pack(ds)
 	var hs := []
 	for h in hqs:
 		hs.append([] if h == null else [h.hp, Array(h.queue), h.build_progress, h.rally_point, h.shots, h.shot_to])
-	return [match_time, money.duplicate(), ds, hs]
+	return [match_time, money.duplicate(), ds.data_array, hs]
 
 
 @rpc("authority", "call_remote", "unreliable_ordered", 1)
@@ -481,9 +570,10 @@ func _receive_state(s: Array) -> void:
 		return
 	match_time = s[0]
 	money = s[1]
-	for i in districts.size():
-		var d: Array = s[2][i]
-		districts[i].apply_net(d[0], d[1], d[2], d[3])
+	var ds := StreamPeerBuffer.new()
+	ds.data_array = s[2]
+	for b in businesses:
+		b.unpack(ds)
 	for f in hqs.size():
 		if hqs[f] != null and not s[3][f].is_empty():
 			hqs[f].apply_net(s[3][f])
@@ -576,6 +666,31 @@ func request_rally(p: Vector2) -> void:
 		_net_rally.rpc_id(1, p)
 
 
+func request_takeover(b) -> void:
+	if is_authority:
+		_do_takeover(local_family, b.index)
+	else:
+		_net_takeover.rpc_id(1, b.index)
+
+
+func _do_takeover(family: int, index: int) -> String:
+	if index < 0 or index >= businesses.size():
+		return "No such business"
+	var b = businesses[index]
+	var err: String = b.takeover_error(family, money[family])
+	if err == "":
+		money[family] -= b.takeover_cost()
+		b.take_over(family)
+	return err
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _net_takeover(index: int) -> void:
+	var f := _sender_family()
+	if f >= 0:
+		_do_takeover(f, index)
+
+
 func _do_recruit(family: int, type_id: String) -> String:
 	var err: String = hqs[family].enqueue_error(type_id)
 	if err == "":
@@ -636,19 +751,30 @@ func _client_bot(delta: float) -> void:
 		return
 	_bot_timer = 2.0
 	request_recruit(GameData.UNIT_ORDER[randi() % GameData.UNIT_ORDER.size()])
+	for b in businesses:
+		if b.takeover_error(local_family, money[local_family]) == "" and money[local_family] > 300:
+			request_takeover(b)
+			break
 	var mine := get_units(local_family)
 	if mine.is_empty():
 		return
 	var hq_pos: Vector2 = hqs[local_family].position
-	var targets := districts.filter(func(d):
-		return d.owner_family == GameData.NEUTRAL or is_enemy(local_family, d.owner_family))
+	var targets := businesses.filter(func(b):
+		return b.owner_family == GameData.NEUTRAL or is_enemy(local_family, b.owner_family))
 	if targets.is_empty() or mine.size() >= 15:
 		var enemy = find_enemy_near(hq_pos, local_family, INF)
-		if enemy != null:
+		if enemy is HQ:
 			request_attack(mine, enemy)
+		elif enemy != null:
+			# Attack-move on the nearest enemy HQ, fighting through its crew.
+			var rival_hqs := hqs.filter(func(h): return h != null and h.hp > 0.0 and is_enemy(local_family, h.family))
+			rival_hqs.sort_custom(func(a, b): return a.position.distance_to(hq_pos) < b.position.distance_to(hq_pos))
+			request_move(mine, rival_hqs[0].position if not rival_hqs.is_empty() else enemy.position, true)
 		return
 	targets.sort_custom(func(a, b): return a.center().distance_to(hq_pos) < b.center().distance_to(hq_pos))
-	request_move(mine, targets[0].center(), true)
+	for i in mine.size():
+		request_move([mine[i]], targets[(i / 2) % targets.size()].center(), true)
+
 
 # --- Player commands ----------------------------------------------------------
 
@@ -755,11 +881,18 @@ func _handle_key(event: InputEventKey) -> void:
 			set_selection(get_units(local_family))
 		KEY_H, KEY_SPACE:
 			center_camera(hqs[local_family].position)
+		KEY_T:
+			takeover_selected()
+		KEY_TAB:
+			hud.toggle_territory()
 		KEY_ESCAPE:
 			if attack_move_armed:
 				attack_move_armed = false
+			elif hud.territory_visible():
+				hud.toggle_territory()
 			else:
 				set_selection([])
+				select_business(null)
 
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
@@ -813,7 +946,14 @@ func _finish_selection(wp: Vector2, additive: bool) -> void:
 			picked.append(best)
 		elif not additive and wp.distance_to(hqs[local_family].position) < hqs[local_family].radius:
 			set_selection([], true)
+			select_business(null)
 			return
+		elif not additive:
+			var b = business_at(wp, 0.0)
+			if b != null:
+				set_selection([])
+				select_business(b)
+				return
 	if additive:
 		for u in selected:
 			if not picked.has(u):
@@ -831,21 +971,69 @@ func _order_at(wp: Vector2, attack_move: bool) -> void:
 		request_attack(selected, target)
 		markers.append({"pos": target.position, "age": 0.0, "attack": true})
 		return
+	var b = business_at(wp, 0.0)
+	if b != null:
+		# Send the crew to lean on that business; spread them along its front.
+		var spots := []
+		for i in selected.size():
+			spots.append(b.center() + Vector2((i % 3 - 1) * 26.0, (i / 3) * 24.0 - 12.0))
+		if is_authority:
+			for i in selected.size():
+				if attack_move:
+					selected[i].command_attack_move(spots[i])
+				else:
+					selected[i].command_move(spots[i])
+		else:
+			for i in selected.size():
+				request_move([selected[i]], spots[i], attack_move)
+		select_business(b)
+		markers.append({"pos": b.center(), "age": 0.0, "attack": attack_move})
+		return
 	request_move(selected, wp, attack_move)
 	markers.append({"pos": wp, "age": 0.0, "attack": attack_move})
 
 
+func select_business(b) -> void:
+	if selected_business != null and is_instance_valid(selected_business):
+		selected_business.highlighted = false
+	selected_business = b
+	if b != null:
+		b.highlighted = true
+
+
+func takeover_selected() -> void:
+	var b = selected_business
+	if b == null or game_over:
+		return
+	var err: String = b.takeover_error(local_family, money[local_family])
+	if err != "":
+		hud.notify(err)
+		return
+	request_takeover(b)
+	hud.notify("We bought out %s" % b.business_name)
+
+
 func _draw() -> void:
-	# Asphalt and lane markings under the blocks.
+	# Asphalt and lane markings under the blocks; avenues between districts.
 	draw_rect(Rect2(Vector2.ZERO, GameData.WORLD_SIZE), Color(0.11, 0.11, 0.12))
+	var step := GameData.BLOCK + Vector2(GameData.STREET, GameData.STREET)
 	var dash := Color(0.75, 0.68, 0.35, 0.5)
-	var block: Vector2 = districts[0].rect.size if not districts.is_empty() else Vector2(500, 500)
 	for c in GameData.COLS + 1:
-		var x: float = GameData.STREET / 2.0 + c * (block.x + GameData.STREET)
+		var x: float = GameData.STREET / 2.0 + c * step.x
+		var avenue := c % GameData.DISTRICT_SPAN == 0
 		for y in range(0, int(GameData.WORLD_SIZE.y), 40):
-			draw_line(Vector2(x, y), Vector2(x, y + 20), dash, 2.0)
+			if avenue:
+				draw_line(Vector2(x - 3, y), Vector2(x - 3, y + 24), dash, 2.0)
+				draw_line(Vector2(x + 3, y), Vector2(x + 3, y + 24), dash, 2.0)
+			else:
+				draw_line(Vector2(x, y), Vector2(x, y + 16), Color(0.6, 0.6, 0.6, 0.25), 2.0)
 	for r in GameData.ROWS + 1:
-		var y: float = GameData.STREET / 2.0 + r * (block.y + GameData.STREET)
+		var y: float = GameData.STREET / 2.0 + r * step.y
+		var avenue := r % GameData.DISTRICT_SPAN == 0
 		for x in range(0, int(GameData.WORLD_SIZE.x), 40):
-			draw_line(Vector2(x, y), Vector2(x + 20, y), dash, 2.0)
+			if avenue:
+				draw_line(Vector2(x, y - 3), Vector2(x + 24, y - 3), dash, 2.0)
+				draw_line(Vector2(x, y + 3), Vector2(x + 24, y + 3), dash, 2.0)
+			else:
+				draw_line(Vector2(x, y), Vector2(x + 16, y), Color(0.6, 0.6, 0.6, 0.25), 2.0)
 	draw_rect(Rect2(Vector2.ZERO, GameData.WORLD_SIZE), Color(0.3, 0.3, 0.32), false, 6.0)

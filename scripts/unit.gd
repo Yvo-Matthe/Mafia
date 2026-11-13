@@ -158,7 +158,10 @@ func _physics_process(delta: float) -> void:
 	if attack_target != null and _auto_target and position.distance_to(_auto_anchor) > LEASH:
 		attack_target = null
 	if attack_target == null and (not has_move_order or attack_move):
-		var enemy = main.find_enemy_near(position, family, stats["range"] + AGGRO)
+		# Idle crew only pick fights with gangsters; burning down an HQ takes
+		# an attack or attack-move order.
+		var reach: float = stats["range"] + AGGRO
+		var enemy = main.find_enemy_near(position, family, reach) if attack_move else main.find_enemy_unit_near(position, family, reach)
 		if enemy != null:
 			_acquire(enemy)
 

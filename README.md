@@ -1,11 +1,12 @@
 # Mafia: City of Families
 
 A top-down real-time strategy game for PC. Up to four crime families (the
-Corrados, Morettis, Bellinis and Vitales) fight over a city of twelve
-districts. Any family can be run by a person, online, or by the computer, and
-families can team up. Take blocks by standing your crew in them, collect
-their income, recruit more muscle, and either own the whole city or burn the
-rival headquarters down.
+Corrados, Morettis, Bellinis and Vitales) fight over a big, scrolling city of
+48 blocks and about 200 businesses, grouped into twelve districts. Any family
+can be run by a person, online, or by the computer, and families can team up.
+Lean on bakeries, bars and casinos until they pay you protection, buy out the
+best of them, run whole districts, recruit more muscle, and either rule the
+whole city or burn the rival headquarters down.
 
 This is a playable vertical slice built with **Godot 4.3** (GDScript, no paid
 engine or assets; everything is drawn in code).
@@ -54,7 +55,10 @@ host leaves, the match ends. Online matches can't be paused.
 | Input | Action |
 | --- | --- |
 | Left-click / left-drag | Select a unit / box-select (Shift adds) |
-| Right-click | Move, or attack the enemy under the cursor |
+| Right-click | Move, attack the enemy under the cursor, or lean on the business under it |
+| Left-click a business | Show its details (owner, takings, takeover price) |
+| T | Take over the selected business |
+| Tab | Territory screen: income per district |
 | A, then left-click | Attack-move (fight anything on the way) |
 | S | Stop |
 | F | Select your whole crew |
@@ -66,11 +70,24 @@ host leaves, the match ends. Online matches can't be paused.
 | P | Pause (single player only) |
 | R | After a match: play again (single player) or back to the menu (online) |
 
-**Districts.** A district's ring fills toward whichever family has units
-inside it and nobody else's. Neutral blocks take 100 points to claim; an enemy
-block must be drained to neutral first (200 points). Each unit adds 10
-points per second, up to 4 units. Owned districts pay their income every 3
-seconds on top of your HQ's base income.
+**Rackets.** Every block is lined with businesses, from barbers ($2) to
+casinos ($16+), and richer districts pay more. Send crew to a business
+(right-click it) and they lean on it while they stand there: its meter fills
+at 12 points per second per gangster, up to 3. A free business pays you
+protection, 40% of its takings, once the meter is full. A rival's business has
+to be drained to free first, and one they own outright takes twice as long.
+Rival crews at the same business stall each other.
+
+**Takeovers.** Click a business that pays you protection and press **T** (or
+the button) to buy it out for 30x its takings. From then on it pays its full
+takings. Takeovers are the main way to turn cash into income.
+
+**Districts.** Hold more than half the businesses in a district and you run
+it: it shows your colour and pays a district bonus ($10 to $25) every payout.
+Each family starts running its home district. The **Territory** screen (Tab)
+lists every district with who runs it, your protected and owned businesses,
+rival holdings and what it earns you, plus a breakdown of your income.
+Everything pays every 3 seconds on top of your HQ's base income.
 
 **Units.**
 
@@ -80,16 +97,20 @@ seconds on top of your HQ's base income.
 | Enforcer | $300 | 230 | 14 | short | Slow, soaks damage |
 | Hitman | $450 | 70 | 32 | long | Fragile, hits hard from range |
 
-Headquarters have 1500 HP and a small gun that shoots units close by.
+Headquarters have 2500 HP and a small gun that shoots units close by. Idle
+crew only fight other gangsters; to hit a headquarters, order an attack on it
+or attack-move past it.
 
 **Winning.** A family whose headquarters burns is out: its crew scatters and
-its districts go neutral. A team wins when every rival team is out, or when
-its families own all 12 districts between them. If you are knocked out while
+its businesses go free. A team wins when every rival team is out, or when
+its families run all 12 districts between them. If you are knocked out while
 allies fight on, you can keep watching.
 
 **Computer families.** You are always the Corrados. Each computer family recruits continuously, defends its HQ, sends
-crews of 2 to 3 toward the most valuable districts near them, and launches an
-all-out assault on the nearest enemy HQ once it has 18 men.
+crews of 1 to 2 to shake down the most valuable businesses near them
+(preferring ones that would tip a district), spends spare cash taking over
+the rackets it runs, and after six minutes launches an all-out assault on the
+nearest enemy HQ once it has 22 men.
 
 ## Project layout
 
@@ -99,13 +120,14 @@ scenes/menu.tscn       Title screen (entry scene): single player, host, join
 scenes/main.tscn       A match
 scripts/net.gd         Autoload: lobby seats, teams, and host / client session state
 scripts/menu.gd        Title screen, connecting and the match lobby
-scripts/game_data.gd   All balance numbers, unit stats, district names and income
-scripts/main.gd        Match setup, input, orders, income, victory and network sync
-scripts/district.gd    Capture logic and drawing for one city block
+scripts/game_data.gd   All balance numbers, unit stats, city layout, business types, districts
+scripts/main.gd        City building, input, orders, income, victory and network sync
+scripts/district.gd    One district of 2 x 2 blocks: lots, apartment houses, who runs it
+scripts/business.gd    One business: extortion meter, protection, takeover, drawing
 scripts/unit.gd        Movement, targeting and combat for one soldier
 scripts/hq.gd          Recruitment queue, rally point, HQ defense
 scripts/rival_ai.gd    Computer-run family
-scripts/hud.gd         Top bar, recruit panel, notifications, end screen
+scripts/hud.gd         Top bar, recruit panel, business panel, territory screen, end screen
 scripts/minimap.gd     Clickable city overview
 scripts/overlay.gd     Selection box and order markers
 ```
@@ -123,7 +145,7 @@ the result:
 
 ```
 godot --headless --fixed-fps 60 --path . -- --autoplay
-# AUTOPLAY RESULT: winner=The Corrado Family after 225s (...) districts 12-0
+# AUTOPLAY RESULT: winner=The Moretti Family after 432s (...) districts: ..., Moretti 9 (146 businesses, 146 owned, $1297/interval)
 ```
 
 `--slots=you,ai,ai,ai` sets the seats (`ai`, `open` or `closed` after the
