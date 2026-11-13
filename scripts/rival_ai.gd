@@ -1,15 +1,18 @@
 class_name RivalAI
 extends Node
 ## Computer-controlled family. Thinks once a second: recruits, defends its
-## headquarters, sends crews to grab the most profitable nearby districts,
+## headquarters, sends small crews to shake down the most profitable nearby
+## businesses, buys out the rackets it already runs when it has spare cash,
 ## and goes all-in on the nearest enemy HQ once its army is large. Runs only
 ## where the match is simulated (single player, or the host).
 
 const THINK_INTERVAL := 1.0
-const DEFEND_RADIUS := 450.0
-const RECALL_RADIUS := 1100.0
-const ALL_IN_ARMY := 18
-const CREW_SIZE := 3
+const DEFEND_RADIUS := 500.0
+const RECALL_RADIUS := 1600.0
+const ALL_IN_ARMY := 22
+const ALL_IN_AFTER := 360.0  # seconds of racketeering before going for an HQ
+const CREW_SIZE := 2
+const CASH_RESERVE := 500  # kept back for recruiting before buying businesses
 
 var main: Node
 var family := 1
@@ -36,6 +39,7 @@ func _physics_process(delta: float) -> void:
 	_recruit(hq)
 	_defend(hq)
 	_expand(hq)
+	_buy_out()
 
 
 func _recruit(hq) -> void:
@@ -73,12 +77,12 @@ func _expand(hq) -> void:
 	var enemy_hq = _nearest(hq.position, main.hqs.filter(
 		func(h): return h != null and h.hp > 0.0 and main.is_enemy(family, h.family)))
 
-	if units.size() >= ALL_IN_ARMY and enemy_hq != null:
+	if units.size() >= ALL_IN_ARMY and main.match_time > ALL_IN_AFTER and enemy_hq != null:
 		for u in idle:
 			u.command_attack_move(enemy_hq.position + Vector2(_rng.randf_range(-40, 40), _rng.randf_range(-40, 40)))
 		return
 
-	var min_crew := 2 if main.match_time < 90.0 else CREW_SIZE
+	var min_crew := 1 if main.match_time < 120.0 else CREW_SIZE
 	if idle.size() < min_crew:
 		return
 
@@ -87,42 +91,60 @@ func _expand(hq) -> void:
 		origin += u.position
 	origin /= idle.size()
 
-	# Leave blocks our allies hold alone.
-	var targets: Array = main.districts.filter(func(d):
-		return not d.is_secured_by(family) and (d.owner_family == GameData.NEUTRAL or d.owner_family == family or main.is_enemy(family, d.owner_family)))
+	# Leave businesses our allies hold alone.
+	var targets: Array = main.businesses.filter(func(b): return _wants(b))
 	if targets.is_empty():
 		if enemy_hq != null:
 			main.issue_attack_move(idle, enemy_hq.position)
 		return
 	targets.sort_custom(func(a, b): return _score(a, origin) > _score(b, origin))
 
-	var crew_index := 0
+	var crews := []
 	for i in range(0, idle.size(), CREW_SIZE):
-		var crew := idle.slice(i, i + CREW_SIZE)
-		if crew.size() < min_crew and crew_index > 0:
-			# Leftovers reinforce the first crew instead of going alone.
-			crew_index = 0
-		var d = targets[crew_index % targets.size()]
-		main.issue_attack_move(crew, d.center())
-		crew_index += 1
+		crews.append(idle.slice(i, i + CREW_SIZE))
+	if crews.size() > 1 and crews[-1].size() < min_crew:
+		crews[0].append_array(crews.pop_back())  # leftovers reinforce
+	for k in crews.size():
+		var b = targets[k % targets.size()]
+		main.issue_move(crews[k], b.center(), false)
 
 
-func _score(d, origin: Vector2) -> float:
-	var s: float = d.income * 3.0 - origin.distance_to(d.center()) / 6.0
-	for f in d.presence.size():
+## Businesses worth leaning on: free ones, rivals', and ours that are slipping.
+func _wants(b) -> bool:
+	if b.is_secured_by(family):
+		return false
+	return b.owner_family == GameData.NEUTRAL or b.owner_family == family or main.is_enemy(family, b.owner_family)
+
+
+func _score(b, origin: Vector2) -> float:
+	var s: float = b.takings * 4.0 - origin.distance_to(b.center()) / 8.0
+	for f in b.presence.size():
 		if main.is_enemy(family, f):
-			s -= d.presence[f] * 25.0
-	if d.owner_family != GameData.NEUTRAL and main.is_enemy(family, d.owner_family):
-		s += 15.0
+			s -= b.presence[f] * 25.0
+		elif f == family:
+			s -= b.presence[f] * 12.0  # someone's already on it
+	if b.owner_family != GameData.NEUTRAL and main.is_enemy(family, b.owner_family):
+		s += 10.0 if b.status == Business.Status.PROTECTED else -10.0
+	var d = main.districts[b.district]
+	if d.controller != family and d.held_by(family) >= d.businesses.size() * GameData.DISTRICT_MAJORITY - 1:
+		s += 20.0  # one more and the district is ours
 	return s
 
 
-## Idle units standing in a district we haven't secured yet keep capturing.
+## Idle crew standing at a business we haven't secured keep leaning on it.
 func _is_holding(u) -> bool:
-	for d in main.districts:
-		if d.rect.has_point(u.position):
-			return not d.is_secured_by(family) and (d.owner_family == GameData.NEUTRAL or d.owner_family == family or main.is_enemy(family, d.owner_family))
-	return false
+	var b = main.business_at(u.position)
+	return b != null and _wants(b)
+
+
+## Spare cash goes into taking over the best racket we already run.
+func _buy_out() -> void:
+	var best = null
+	for b in main.businesses:
+		if b.takeover_error(family, main.money[family] - CASH_RESERVE) == "" and (best == null or b.takings > best.takings):
+			best = b
+	if best != null:
+		main._do_takeover(family, best.index)
 
 
 func _nearest(p: Vector2, list: Array):

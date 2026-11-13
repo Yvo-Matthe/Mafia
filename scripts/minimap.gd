@@ -16,12 +16,20 @@ func _to_map(p: Vector2) -> Vector2:
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.04, 0.04, 0.05, 0.9))
 	for d in main.districts:
-		var col := Color(0.25, 0.25, 0.27)
-		if d.owner_family != GameData.NEUTRAL:
-			col = GameData.FAMILY_COLORS[d.owner_family].darkened(0.35)
-		draw_rect(Rect2(_to_map(d.rect.position), _to_map(d.rect.size)), col)
-		if d.contested:
-			draw_rect(Rect2(_to_map(d.rect.position), _to_map(d.rect.size)), Color(1, 0.85, 0.3), false, 1.5)
+		for blk in d.blocks:
+			var col := Color(0.2, 0.2, 0.22)
+			if d.controller != GameData.NEUTRAL:
+				col = col.lerp(GameData.FAMILY_COLORS[d.controller], 0.3)
+			draw_rect(Rect2(_to_map(blk.position), _to_map(blk.size)), col)
+	for b in main.businesses:
+		var r := Rect2(_to_map(b.rect.position), _to_map(b.rect.size)).grow(-1.0)
+		if b.owner_family != GameData.NEUTRAL:
+			var fc: Color = GameData.FAMILY_COLORS[b.owner_family]
+			draw_rect(r, fc if b.status == Business.Status.OWNED else fc.darkened(0.4))
+		else:
+			draw_rect(r, Color(0.36, 0.35, 0.33))
+		if b.contested:
+			draw_rect(r, Color(1, 0.85, 0.3), false, 1.0)
 	for hq in main.hqs:
 		if hq != null and hq.hp > 0.0:
 			var c := _to_map(hq.position)

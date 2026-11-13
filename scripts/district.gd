@@ -1,164 +1,157 @@
 class_name District
 extends Node2D
-## One city block. Standing units push its control meter toward their family;
-## the owner collects its income.
+## A named neighbourhood of 2 x 2 city blocks, each lined with businesses and
+## apartment houses. Whoever holds more than half of its businesses runs the
+## district and collects its bonus on top of the rackets themselves.
 
-signal owner_changed(district: District, previous_owner: int)
+signal controller_changed(district: District, previous: int)
 
-const CAPTURE_RATE := 10.0  # control points per second per unit
-const MAX_CAPTURERS := 4  # more units than this don't speed capture up
-const PLAZA_RADIUS := 70.0
+const LOT_COLS := 3
+const LOT_ROWS := 2
+const LOT_GAP := 8.0
+const SIDEWALK := 10.0
+const BUSINESS_CHANCE := 0.7
+const MIN_BUSINESSES := 3  # per block
 
 var index := 0
 var district_name := ""
-var income := 0
+var bonus := 0
+var wealth := 1.0
 var rect := Rect2()
-var owner_family := GameData.NEUTRAL
-## Whose capture meter is showing: the owner once owned, else the family
-## part-way through taking it.
-var control_family := GameData.NEUTRAL
-var control := 0.0  # 0..100
-var presence := [0, 0, 0, 0]
-var contested := false
+var blocks: Array[Rect2] = []
+var businesses: Array = []
+## The family that runs the district, or NEUTRAL.
+var controller := GameData.NEUTRAL
 
-var _buildings: Array = []
+var _houses: Array = []  # {rect, color}
 
 
-func setup(i: int, r: Rect2, data: Dictionary, rng: RandomNumberGenerator) -> void:
+func setup(i: int, block_rects: Array[Rect2], data: Dictionary) -> void:
 	index = i
-	rect = r
 	district_name = data["name"]
-	income = data["income"]
+	bonus = data["bonus"]
+	wealth = data["wealth"]
+	blocks = block_rects
+	rect = blocks[0]
+	for b in blocks:
+		rect = rect.merge(b)
 	name = "District_%d" % i
-	_generate_buildings(rng)
+
+
+## Lays out the lots of every block. Returns the new businesses (not yet in
+## the tree); `next_index` is the first business number to use.
+func generate(rng: RandomNumberGenerator, next_index: int, mix: Array) -> Array:
+	var out := []
+	for block in blocks:
+		var inner := block.grow(-SIDEWALK)
+		var lot := Vector2(inner.size.x / LOT_COLS, inner.size.y / LOT_ROWS)
+		var lots := []
+		for gy in LOT_ROWS:
+			for gx in LOT_COLS:
+				lots.append(Rect2(inner.position + Vector2(gx, gy) * lot, lot).grow(-LOT_GAP / 2.0))
+		var is_shop := []
+		var shop_count := 0
+		for l in lots:
+			var shop := rng.randf() < BUSINESS_CHANCE
+			is_shop.append(shop)
+			shop_count += int(shop)
+		while shop_count < MIN_BUSINESSES:
+			var k := rng.randi() % lots.size()
+			if not is_shop[k]:
+				is_shop[k] = true
+				shop_count += 1
+		for k in lots.size():
+			var r: Rect2 = lots[k]
+			if is_shop[k]:
+				var b := Business.new()
+				var t: String = mix[rng.randi() % mix.size()]
+				var who: String = GameData.BUSINESS_OWNERS[rng.randi() % GameData.BUSINESS_OWNERS.size()]
+				b.setup(next_index + out.size(), index, t, who, r, wealth, k >= LOT_COLS)
+				out.append(b)
+			else:
+				# Apartment houses: one or two buildings on the lot.
+				var parts: Array[Rect2] = [r]
+				if rng.randf() < 0.5:
+					var w := r.size.x * rng.randf_range(0.4, 0.6)
+					parts = [Rect2(r.position, Vector2(w - 3.0, r.size.y)),
+						Rect2(r.position + Vector2(w + 3.0, 0), Vector2(r.size.x - w - 3.0, r.size.y))]
+				for p in parts:
+					var shade := rng.randf_range(0.17, 0.27)
+					var warm := rng.randf_range(0.0, 0.05)
+					_houses.append({"rect": p, "color": Color(shade + warm, shade, shade - warm * 0.5)})
+	businesses = out
+	return out
 
 
 func center() -> Vector2:
 	return rect.get_center()
 
 
-func set_owner_family(f: int) -> void:
-	owner_family = f
-	control_family = f
-	control = 0.0 if f == GameData.NEUTRAL else 100.0
-	queue_redraw()
+## Businesses held (protected or owned) by family f.
+func held_by(f: int) -> int:
+	return businesses.filter(func(b): return b.owner_family == f).size()
 
 
-## True once the family owns the block and its meter is full.
-func is_secured_by(f: int) -> bool:
-	return owner_family == f and control >= 99.9
+func owned_by(f: int) -> int:
+	return businesses.filter(func(b): return b.owner_family == f and b.status == Business.Status.OWNED).size()
 
 
-## Client side: take the host's latest state for this district.
-func apply_net(new_owner: int, new_control_family: int, new_control: float, is_contested: bool) -> void:
-	control_family = new_control_family
-	control = new_control
-	contested = is_contested
-	if new_owner != owner_family:
-		var previous := owner_family
-		owner_family = new_owner
-		owner_changed.emit(self, previous)
-	queue_redraw()
+## What family f collects from this district each interval.
+func income_for(f: int) -> int:
+	var total := 0
+	for b in businesses:
+		if b.owner_family == f:
+			total += b.income()
+	if controller == f:
+		total += bonus
+	return total
 
 
-## Units of exactly one team in the block move its meter: they top up a
-## block their team owns, drain an enemy block to neutral, then claim it.
-## `teams[f]` is family f's team.
-func update_capture(delta: float, units: Array, teams: Array) -> void:
-	presence = [0, 0, 0, 0]
-	for u in units:
-		if rect.has_point(u.position):
-			presence[u.family] += 1
-	var team_counts := {}
-	for f in presence.size():
-		if presence[f] > 0:
-			team_counts[teams[f]] = team_counts.get(teams[f], 0) + presence[f]
-	contested = team_counts.size() > 1
-	queue_redraw()
-	if team_counts.size() != 1:
-		return
-	var team: int = team_counts.keys()[0]
-	var leader := -1  # the team's family with most units here takes the block
-	for f in presence.size():
-		if teams[f] == team and presence[f] > 0 and (leader < 0 or presence[f] > presence[leader]):
-			leader = f
-	var amount: float = CAPTURE_RATE * mini(team_counts[team], MAX_CAPTURERS) * delta
-
-	var previous := owner_family
-	if owner_family != GameData.NEUTRAL:
-		if teams[owner_family] == team:
-			control = minf(control + amount, 100.0)
-		else:
-			control -= amount
-			if control <= 0.0:
-				owner_family = GameData.NEUTRAL
-				control_family = GameData.NEUTRAL
-				control = 0.0
-	elif control_family != GameData.NEUTRAL and control_family != leader and teams[control_family] != team:
-		control -= amount
-		if control <= 0.0:
-			control_family = GameData.NEUTRAL
-			control = 0.0
-	else:
-		control_family = leader
-		control = minf(control + amount, 100.0)
-		if control >= 100.0:
-			owner_family = leader
-	if previous != owner_family:
-		owner_changed.emit(self, previous)
+func total_takings() -> int:
+	var total := 0
+	for b in businesses:
+		total += b.takings
+	return total
 
 
-func _generate_buildings(rng: RandomNumberGenerator) -> void:
-	var inner := rect.grow(-16.0)
-	var lot := inner.size / 3.0
-	for gy in 3:
-		for gx in 3:
-			if gx == 1 and gy == 1:
-				continue  # plaza
-			var cell := Rect2(inner.position + Vector2(gx, gy) * lot, lot).grow(-8.0)
-			var split := rng.randf() < 0.5
-			var parts: Array[Rect2] = []
-			if split and cell.size.x > cell.size.y:
-				var w := cell.size.x * rng.randf_range(0.4, 0.6)
-				parts.append(Rect2(cell.position, Vector2(w - 4.0, cell.size.y)))
-				parts.append(Rect2(cell.position + Vector2(w + 4.0, 0), Vector2(cell.size.x - w - 4.0, cell.size.y)))
-			elif split:
-				var h := cell.size.y * rng.randf_range(0.4, 0.6)
-				parts.append(Rect2(cell.position, Vector2(cell.size.x, h - 4.0)))
-				parts.append(Rect2(cell.position + Vector2(0, h + 4.0), Vector2(cell.size.x, cell.size.y - h - 4.0)))
-			else:
-				parts.append(cell)
-			for p in parts:
-				var shade := rng.randf_range(0.2, 0.34)
-				var warm := rng.randf_range(0.0, 0.06)
-				_buildings.append({"rect": p, "color": Color(shade + warm, shade, shade - warm * 0.5)})
+## Works out who runs the district after a business changed hands.
+func recompute() -> void:
+	var counts := [0, 0, 0, 0]
+	for b in businesses:
+		if b.owner_family >= 0:
+			counts[b.owner_family] += 1
+	var best := GameData.NEUTRAL
+	for f in counts.size():
+		if counts[f] > businesses.size() * GameData.DISTRICT_MAJORITY:
+			best = f
+	if best != controller:
+		var previous := controller
+		controller = best
+		queue_redraw()
+		controller_changed.emit(self, previous)
 
 
 func _draw() -> void:
-	var base := Color(0.17, 0.17, 0.18)
-	var tint := base
-	var edge := Color(0.35, 0.35, 0.38)
-	if owner_family != GameData.NEUTRAL:
-		tint = base.lerp(GameData.FAMILY_COLORS[owner_family], 0.25)
-		edge = GameData.FAMILY_COLORS[owner_family]
-	draw_rect(rect, tint)
-	for b in _buildings:
-		var r: Rect2 = b["rect"]
-		draw_rect(r, b["color"])
-		draw_rect(r.grow(-5.0), b["color"].lightened(0.07))
-	draw_rect(rect, edge, false, 4.0)
-
-	var c := center()
-	draw_circle(c, PLAZA_RADIUS, tint.darkened(0.25))
-	if control > 0.5 and control_family != GameData.NEUTRAL:
-		var col: Color = GameData.FAMILY_COLORS[control_family]
-		draw_arc(c, PLAZA_RADIUS + 8.0, -PI / 2.0, -PI / 2.0 + TAU * control / 100.0, 64, col, 6.0)
+	var tint := Color(0.2, 0.2, 0.21)
+	if controller != GameData.NEUTRAL:
+		tint = tint.lerp(GameData.FAMILY_COLORS[controller], 0.22)
+	for b in blocks:
+		draw_rect(b, tint)  # sidewalk
+		draw_rect(b.grow(-SIDEWALK + 2.0), tint.darkened(0.2))
+	for h in _houses:
+		var r: Rect2 = h["rect"]
+		draw_rect(r, h["color"])
+		draw_rect(r.grow(-5.0), h["color"].lightened(0.05))
+		# rooftop details
+		draw_rect(Rect2(r.position + Vector2(8, 8), Vector2(10, 8)), h["color"].darkened(0.3))
+	if controller != GameData.NEUTRAL:
+		draw_rect(rect.grow(GameData.STREET / 2.0 - 6.0), GameData.FAMILY_COLORS[controller], false, 3.0)
 
 	var font := ThemeDB.fallback_font
-	var title_pos := rect.position + Vector2(0, 30)
-	draw_string(font, title_pos + Vector2(2, 2), district_name, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x, 22, Color(0, 0, 0, 0.7))
-	draw_string(font, title_pos, district_name, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x, 22, Color(0.95, 0.92, 0.85))
-	var sub := "$%d" % income
-	if contested:
-		sub += "   CONTESTED"
-	draw_string(font, title_pos + Vector2(0, 24), sub, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x, 16, Color(0.95, 0.85, 0.4))
+	var title_pos := Vector2(rect.position.x, rect.position.y - GameData.STREET / 2.0 + 9.0)
+	var title := district_name.to_upper()
+	if controller != GameData.NEUTRAL:
+		title += "  ·  %s turf" % GameData.FAMILY_SHORT[controller]
+	draw_string(font, title_pos + Vector2(2, 2), title, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x, 22, Color(0, 0, 0, 0.7))
+	var col: Color = Color(0.95, 0.92, 0.85) if controller == GameData.NEUTRAL else GameData.FAMILY_COLORS[controller].lightened(0.45)
+	draw_string(font, title_pos, title, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x, 22, col)

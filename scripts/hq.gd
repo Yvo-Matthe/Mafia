@@ -3,7 +3,7 @@ extends Node2D
 ## A family's headquarters: recruits soldiers, pays a base income and
 ## defends itself. Lose it and the family is finished.
 
-const MAX_HP := 1500.0
+const MAX_HP := 2500.0
 const GUN_DAMAGE := 9.0
 const GUN_RANGE := 170.0
 const GUN_COOLDOWN := 1.0
